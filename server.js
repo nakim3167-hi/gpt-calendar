@@ -1,6 +1,7 @@
 const express = require("express");
 const cors = require("cors");
 const dotenv = require("dotenv");
+const fs = require("fs");
 const { google } = require("googleapis");
 
 dotenv.config();
@@ -10,6 +11,7 @@ app.use(cors());
 app.use(express.json());
 
 const PORT = process.env.PORT || 3000;
+const TOKEN_FILE = "tokens.json";
 
 const oauth2Client = new google.auth.OAuth2(
   process.env.GOOGLE_CLIENT_ID,
@@ -17,9 +19,17 @@ const oauth2Client = new google.auth.OAuth2(
   process.env.GOOGLE_REDIRECT_URI
 );
 
-// 서버 메모리에 저장되는 토큰
-// Render가 재시작/재배포되면 초기화될 수 있음
+// 서버 시작 시 저장된 토큰 불러오기
 let tokens = null;
+if (fs.existsSync(TOKEN_FILE)) {
+  try {
+    tokens = JSON.parse(fs.readFileSync(TOKEN_FILE, "utf-8"));
+    oauth2Client.setCredentials(tokens);
+    console.log("Saved tokens loaded");
+  } catch (err) {
+    console.error("Failed to load saved tokens:", err);
+  }
+}
 
 app.get("/", (req, res) => {
   res.send("Server running");
@@ -43,10 +53,14 @@ app.get("/oauth2callback", async (req, res) => {
       return res.status(400).send("Missing code");
     }
 
-    const { tokens: t } = await oauth2Client.getToken(code);
+    const tokenResponse = await oauth2Client.getToken(code);
+    tokens = tokenResponse.tokens;
 
-    tokens = t;
     oauth2Client.setCredentials(tokens);
+
+    // 토큰 파일 저장
+    fs.writeFileSync(TOKEN_FILE, JSON.stringify(tokens, null, 2), "utf-8");
+    console.log("Tokens saved to file");
 
     res.send("인증 완료");
   } catch (err) {
@@ -86,7 +100,11 @@ app.get("/events", async (req, res) => {
 
 app.post("/events", async (req, res) => {
   try {
+    console.log("POST /events called");
+    console.log("Request body:", req.body);
+
     if (!tokens) {
+      console.log("No tokens found");
       return res.status(401).json({ error: "Google 로그인 필요" });
     }
 
@@ -95,6 +113,7 @@ app.post("/events", async (req, res) => {
     const { summary, description, location, start, end, attendees } = req.body;
 
     if (!summary || !start || !end) {
+      console.log("Missing required fields");
       return res.status(400).json({
         error: "summary, start, end are required"
       });
@@ -104,6 +123,8 @@ app.post("/events", async (req, res) => {
       version: "v3",
       auth: oauth2Client
     });
+
+    console.log("Calling Google Calendar insert");
 
     const response = await calendar.events.insert({
       calendarId: "primary",
@@ -116,6 +137,8 @@ app.post("/events", async (req, res) => {
         attendees
       }
     });
+
+    console.log("Event created:", response.data?.id);
 
     res.status(201).json(response.data);
   } catch (err) {
