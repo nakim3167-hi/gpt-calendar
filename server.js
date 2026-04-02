@@ -76,7 +76,7 @@ app.get("/events", ensureAuth, async (req, res) => {
   }
 });
 
-app.post("/events", ensureAuth, async (req, res) => {
+app.post("/events", async (req, res) => {
   try {
     const { summary, description, location, start, end, attendees } = req.body;
 
