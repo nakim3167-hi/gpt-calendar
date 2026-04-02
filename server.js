@@ -17,6 +17,8 @@ const oauth2Client = new google.auth.OAuth2(
   process.env.GOOGLE_REDIRECT_URI
 );
 
+// 서버 메모리에 저장되는 토큰
+// Render가 재시작/재배포되면 초기화될 수 있음
 let tokens = null;
 
 app.get("/", (req, res) => {
@@ -24,37 +26,43 @@ app.get("/", (req, res) => {
 });
 
 app.get("/auth/google", (req, res) => {
-  const url = oauth2Client.generateAuthUrl({
+  const authUrl = oauth2Client.generateAuthUrl({
     access_type: "offline",
     prompt: "consent",
     scope: ["https://www.googleapis.com/auth/calendar"]
   });
-  res.redirect(url);
+
+  res.redirect(authUrl);
 });
 
 app.get("/oauth2callback", async (req, res) => {
   try {
     const code = req.query.code;
+
+    if (!code) {
+      return res.status(400).send("Missing code");
+    }
+
     const { tokens: t } = await oauth2Client.getToken(code);
+
     tokens = t;
     oauth2Client.setCredentials(tokens);
+
     res.send("인증 완료");
   } catch (err) {
-    console.error(err);
+    console.error("OAuth callback error:", err);
     res.status(500).send("OAuth failed");
   }
 });
 
-function ensureAuth(req, res, next) {
-  if (!tokens) {
-    return res.status(401).json({ error: "먼저 로그인 필요" });
-  }
-  oauth2Client.setCredentials(tokens);
-  next();
-}
-
-app.get("/events", ensureAuth, async (req, res) => {
+app.get("/events", async (req, res) => {
   try {
+    if (!tokens) {
+      return res.status(401).json({ error: "Google 로그인 필요" });
+    }
+
+    oauth2Client.setCredentials(tokens);
+
     const calendar = google.calendar({
       version: "v3",
       auth: oauth2Client
@@ -71,13 +79,19 @@ app.get("/events", ensureAuth, async (req, res) => {
 
     res.json(result.data.items || []);
   } catch (err) {
-    console.error(err);
+    console.error("GET /events error:", err);
     res.status(500).json({ error: err.message });
   }
 });
 
 app.post("/events", async (req, res) => {
   try {
+    if (!tokens) {
+      return res.status(401).json({ error: "Google 로그인 필요" });
+    }
+
+    oauth2Client.setCredentials(tokens);
+
     const { summary, description, location, start, end, attendees } = req.body;
 
     if (!summary || !start || !end) {
@@ -105,7 +119,7 @@ app.post("/events", async (req, res) => {
 
     res.status(201).json(response.data);
   } catch (err) {
-    console.error(err);
+    console.error("POST /events error:", err);
     res.status(500).json({ error: err.message });
   }
 });
