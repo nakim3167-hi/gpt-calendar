@@ -8,11 +8,15 @@ app.use(express.json());
 
 // ===== 환경변수 =====
 const PORT = process.env.PORT || 10000;
+const LAW_OC = process.env.LAW_OC;
+const GPT_API_KEY = process.env.GPT_API_KEY;
 
-// 반드시 Render에 아래 3개가 있어야 함
+// 반드시 Render에 아래 5개가 있어야 함
 // GOOGLE_CLIENT_ID
 // GOOGLE_CLIENT_SECRET
 // GOOGLE_REDIRECT_URI
+// LAW_OC
+// GPT_API_KEY
 const oauth2Client = new google.auth.OAuth2(
   process.env.GOOGLE_CLIENT_ID,
   process.env.GOOGLE_CLIENT_SECRET,
@@ -22,9 +26,35 @@ const oauth2Client = new google.auth.OAuth2(
 // ===== 토큰 저장 (임시: 메모리) =====
 let tokens = null;
 
+// ===== 공통 유틸 =====
+function requireApiKey(req, res, next) {
+  const auth = req.headers.authorization || "";
+  const token = auth.startsWith("Bearer ") ? auth.slice(7) : "";
+
+  if (!GPT_API_KEY || token !== GPT_API_KEY) {
+    return res.status(401).json({ error: "Unauthorized" });
+  }
+
+  next();
+}
+
+function buildQuery(params) {
+  const usp = new URLSearchParams();
+  Object.entries(params).forEach(([key, value]) => {
+    if (value !== undefined && value !== null && value !== "") {
+      usp.append(key, String(value));
+    }
+  });
+  return usp.toString();
+}
+
 // ===== 기본 확인 =====
 app.get("/", (req, res) => {
   res.send("Server is running");
+});
+
+app.get("/health", (req, res) => {
+  res.json({ ok: true });
 });
 
 // ===== 개인정보 처리방침 =====
@@ -37,9 +67,9 @@ app.get("/privacy", (req, res) => {
       </head>
       <body style="font-family: Arial, sans-serif; padding: 40px; line-height: 1.6;">
         <h1>개인정보 처리방침</h1>
-        <p>이 서비스는 Google Calendar 일정 조회 및 생성 기능을 제공합니다.</p>
-        <p>사용자 인증 정보는 캘린더 작업 수행에 필요한 범위 내에서만 사용됩니다.</p>
-        <p>사용자 데이터는 일정 생성 및 조회 목적 외에는 사용하지 않습니다.</p>
+        <p>이 서비스는 Google Calendar 일정 조회/생성과 법령·판례·관세청 법령해석 조회 기능을 제공합니다.</p>
+        <p>사용자 인증 정보는 캘린더 작업 수행 및 API 요청 처리에 필요한 범위 내에서만 사용됩니다.</p>
+        <p>사용자 데이터는 일정 생성/조회 및 법령정보 조회 목적 외에는 사용하지 않습니다.</p>
         <p>문의: admin@example.com</p>
       </body>
     </html>
@@ -158,6 +188,147 @@ app.post("/events", ensureAuth, async (req, res) => {
   } catch (error) {
     console.error("POST /events error:", error);
     res.status(500).json({ error: error.message });
+  }
+});
+
+// ===== 법령/판례/관세청 법령해석 검색 =====
+app.get("/legal/search", requireApiKey, async (req, res) => {
+  try {
+    const {
+      target,   // kcsCgmExpc | prec | law
+      query,
+      search,
+      display,
+      page,
+      sort,
+      org,
+      curt,
+      JO,
+      prncYd,
+      nb,
+      datSrcNm
+    } = req.query;
+
+    if (!LAW_OC) {
+      return res.status(500).json({ error: "LAW_OC is missing" });
+    }
+
+    if (!target) {
+      return res.status(400).json({ error: "target is required" });
+    }
+
+    const qs = buildQuery({
+      OC: LAW_OC,
+      target,
+      type: "JSON",
+      query,
+      search,
+      display,
+      page,
+      sort,
+      org,
+      curt,
+      JO,
+      prncYd,
+      nb,
+      datSrcNm
+    });
+
+    const url = `https://www.law.go.kr/DRF/lawSearch.do?${qs}`;
+
+    const response = await fetch(url, {
+      method: "GET",
+      headers: {
+        Accept: "application/json, text/plain, */*",
+        "User-Agent": "gpt-calendar-legal-proxy/1.0"
+      }
+    });
+
+    const text = await response.text();
+
+    if (!response.ok) {
+      return res.status(response.status).json({
+        error: "law.go.kr request failed",
+        status: response.status,
+        body: text
+      });
+    }
+
+    try {
+      const data = JSON.parse(text);
+      return res.json(data);
+    } catch {
+      return res.status(502).json({
+        error: "law.go.kr returned non-JSON response",
+        body: text
+      });
+    }
+  } catch (error) {
+    console.error("GET /legal/search error:", error);
+    return res.status(500).json({
+      error: "proxy search failed",
+      detail: error.message
+    });
+  }
+});
+
+// ===== 법령/판례/관세청 법령해석 상세 =====
+app.get("/legal/detail", requireApiKey, async (req, res) => {
+  try {
+    const { target, ID, MST } = req.query;
+
+    if (!LAW_OC) {
+      return res.status(500).json({ error: "LAW_OC is missing" });
+    }
+
+    if (!target) {
+      return res.status(400).json({ error: "target is required" });
+    }
+
+    // 상세 조회는 target에 따라 ID 또는 MST를 쓸 수 있어서 둘 다 지원
+    const qs = buildQuery({
+      OC: LAW_OC,
+      target,
+      type: "JSON",
+      ID,
+      MST
+    });
+
+    const url = `https://www.law.go.kr/DRF/lawService.do?${qs}`;
+
+    const response = await fetch(url, {
+      method: "GET",
+      headers: {
+        Accept: "application/json, text/plain, */*",
+        "User-Agent": "gpt-calendar-legal-proxy/1.0"
+      }
+    });
+
+    const text = await response.text();
+
+    if (!response.ok) {
+      return res.status(response.status).json({
+        error: "law.go.kr request failed",
+        status: response.status,
+        body: text
+      });
+    }
+
+    try {
+      const data = JSON.parse(text);
+      return res.json(data);
+    } catch {
+      return res.status(502).json({
+        error: "law.go.kr returned non-JSON response",
+        body: text
+      });
+    }
+  } catch (error) {
+    console.error("GET /legal/detail error:", error);
+    return res.status(500).json({
+      error: "proxy detail failed",
+      detail: error.message
+    });
   }
 });
 
