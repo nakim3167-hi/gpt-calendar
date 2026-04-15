@@ -234,7 +234,7 @@ app.get("/legal/search", requireApiKey, async (req, res) => {
       datSrcNm
     });
 
-    const url = `https://www.law.go.kr/DRF/lawSearch.do?${qs}`;
+    const url = `http://www.law.go.kr/DRF/lawSearch.do?${qs}`;
 
     const response = await fetch(url, {
       method: "GET",
@@ -267,7 +267,9 @@ app.get("/legal/search", requireApiKey, async (req, res) => {
     console.error("GET /legal/search error:", error);
     return res.status(500).json({
       error: "proxy search failed",
-      detail: error.message
+      detail: error.message,
+      cause: error.cause ? String(error.cause) : null,
+      stack: error.stack
     });
   }
 });
@@ -285,7 +287,6 @@ app.get("/legal/detail", requireApiKey, async (req, res) => {
       return res.status(400).json({ error: "target is required" });
     }
 
-    // 상세 조회는 target에 따라 ID 또는 MST를 쓸 수 있어서 둘 다 지원
     const qs = buildQuery({
       OC: LAW_OC,
       target,
@@ -294,7 +295,7 @@ app.get("/legal/detail", requireApiKey, async (req, res) => {
       MST
     });
 
-    const url = `https://www.law.go.kr/DRF/lawService.do?${qs}`;
+    const url = `http://www.law.go.kr/DRF/lawService.do?${qs}`;
 
     const response = await fetch(url, {
       method: "GET",
@@ -327,7 +328,9 @@ app.get("/legal/detail", requireApiKey, async (req, res) => {
     console.error("GET /legal/detail error:", error);
     return res.status(500).json({
       error: "proxy detail failed",
-      detail: error.message
+      detail: error.message,
+      cause: error.cause ? String(error.cause) : null,
+      stack: error.stack
     });
   }
 });
